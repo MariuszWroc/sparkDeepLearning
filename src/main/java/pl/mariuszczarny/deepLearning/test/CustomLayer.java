@@ -38,6 +38,7 @@ import java.util.Map;
  *
  * @author Alex Black
  */
+@SuppressWarnings("serial")
 public class CustomLayer extends FeedForwardLayer {
 
     private IActivation secondActivationFunction;

@@ -36,6 +36,7 @@ import org.nd4j.linalg.primitives.Pair;
  *
  * @author Alex Black
  */
+@SuppressWarnings("serial")
 public class CustomLayerImpl extends BaseLayer<CustomLayer> { //Generic parameter here: the configuration class type
 
     public CustomLayerImpl(NeuralNetConfiguration conf, DataType dataType) {
