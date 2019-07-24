@@ -17,6 +17,7 @@
 package pl.mariuszczarny.deepLearning.tinyimagenet;
 
 import java.io.BufferedOutputStream;
+import java.io.IOException;
 
 import org.apache.commons.io.FilenameUtils;
 import org.apache.hadoop.fs.FileSystem;
@@ -90,45 +91,8 @@ import pl.mariuszczarny.deepLearning.utils.JCommanderUtils;
 public class TrainSpark {
     public static final Logger log = LoggerFactory.getLogger(TrainSpark.class);
 
-    /* --- Required Arguments -- */
-
-    @Parameter(names = {"--dataPath"}, description = "Path (on HDFS or similar) of data preprocessed by preprocessing script." +
-        " See PreprocessLocal or PreprocessSpark", required = true)
-    private String dataPath;
-
-    @Parameter(names = {"--masterIP"}, description = "Controller/master IP address - required. For example, 10.0.2.4", required = true)
-    private String masterIP;
-
-    @Parameter(names = {"--networkMask"}, description = "Network mask for Spark communication. For example, 10.0.0.0/16", required = true)
-    private String networkMask;
-
-    @Parameter(names = {"--numNodes"}, description = "Number of Spark nodes (machines)", required = true)
-    private int numNodes;
-
-    /* --- Optional Arguments -- */
-
-    @Parameter(names = {"--saveDirectory"}, description = "If set: save the trained network plus evaluation to this directory." +
-        " Otherwise, the trained net will not be saved")
-    private String saveDirectory = null;
-
     @Parameter(names = {"--sparkAppName"}, description = "App name for spark. Optional - can set it to anything to identify your job")
     private String sparkAppName = "DL4JTinyImageNetExample";
-
-    @Parameter(names = {"--numEpochs"}, description = "Number of epochs for training")
-    private int numEpochs = 10;
-
-    @Parameter(names = {"--minibatch"}, description = "Minibatch size (of preprocessed minibatches). Also number of" +
-        "minibatches per worker when fitting")
-    private int minibatch = 32;
-
-    @Parameter(names = {"--numWorkersPerNode"}, description = "Number of workers per Spark node. Usually use 1 per GPU, or 1 for CPU-only workers")
-    private int numWorkersPerNode = 1;
-
-    @Parameter(names = {"--gradientThreshold"}, description = "Gradient threshold. See ")
-    private double gradientThreshold = 1E-3;
-
-    @Parameter(names = {"--port"}, description = "Port number for Spark nodes. This can be any free port (port must be free on all nodes)")
-    private int port = 40123;
 
     public static void main(String[] args) throws Exception {
         new TrainSpark().entryPoint(args);
@@ -139,75 +103,12 @@ public class TrainSpark {
 
         SparkConf conf = new SparkConf();
         conf.setAppName(sparkAppName);
-        System.out.println(conf.toDebugString());
+        log.info(conf.toDebugString());
         JavaSparkContext sc = new JavaSparkContext(conf);
-
-
-
-        //Set up TrainingMaster for gradient sharing training
-        VoidConfiguration voidConfiguration = VoidConfiguration.builder()
-            .unicastPort(port)                          // Should be open for IN/OUT communications on all Spark nodes
-            .networkMask(networkMask)                   // Local network mask - for example, 10.0.0.0/16 - see https://deeplearning4j.org/docs/latest/deeplearning4j-scaleout-parameter-server
-            .controllerAddress(masterIP)                // IP address of the master/driver node
-            .meshBuildMode(MeshBuildMode.PLAIN)
-            .build();
-        TrainingMaster tm = new SharedTrainingMaster.Builder(voidConfiguration, minibatch)
-            .rngSeed(12345)
-            .collectTrainingStats(false)
-            .batchSizePerWorker(minibatch)              // Minibatch size for each worker
-            .thresholdAlgorithm(new AdaptiveThresholdAlgorithm(this.gradientThreshold))     //Threshold algorithm determines the encoding threshold to be use. See docs for details
-            .workersPerNode(numWorkersPerNode)          // Workers per node
-            .build();
-
-
-        ComputationGraph net = NetworkFactory.getCCNNetwork();
-        SparkComputationGraph sparkNet = new SparkComputationGraph(sc, net, tm);
-        sparkNet.setListeners(new PerformanceListener(10, true));
-
-        //Create data loader
-        int imageHeightWidth = 64;      //64x64 pixel input
-        int imageChannels = 3;          //RGB
-        PathLabelGenerator labelMaker = new ParentPathLabelGenerator();
-        ImageRecordReader rr = new ImageRecordReader(imageHeightWidth, imageHeightWidth, imageChannels, labelMaker);
-        rr.setLabels(new TinyImageNetDataSetIterator(1).getLabels());
-        int numClasses = TinyImageNetFetcher.NUM_LABELS;
-        RecordReaderFileBatchLoader loader = new RecordReaderFileBatchLoader(rr, minibatch, 1, numClasses);
-        loader.setPreProcessor(new ImagePreProcessingScaler());   //Scale 0-255 valued pixels to 0-1 range
-
-
-        //Fit the network
-        String trainPath = dataPath + (dataPath.endsWith("/") ? "" : "/") + "train";
-        JavaRDD<String> pathsTrain = SparkUtils.listPaths(sc, trainPath);
-        for (int i = 0; i < numEpochs; i++) {
-            log.info("--- Starting Training: Epoch {} of {} ---", (i + 1), numEpochs);
-            sparkNet.fitPaths(pathsTrain, loader);
-        }
-
-        //Perform evaluation
-        String testPath = dataPath + (dataPath.endsWith("/") ? "" : "/") + "test";
-        JavaRDD<String> pathsTest = SparkUtils.listPaths(sc, testPath);
-        Evaluation evaluation = new Evaluation(TinyImageNetDataSetIterator.getLabels(false), 5); //Set up for top 5 accuracy
-        evaluation = (Evaluation) sparkNet.doEvaluation(pathsTest, loader, evaluation)[0];
-        log.info("Evaluation statistics: {}", evaluation.stats());
-
-        if (saveDirectory != null && saveDirectory.isEmpty()) {
-            log.info("Saving the network and evaluation to directory: {}", saveDirectory);
-
-            // Save network
-            String networkPath = FilenameUtils.concat(saveDirectory, "network.bin");
-            FileSystem fileSystem = FileSystem.get(sc.hadoopConfiguration());
-            try (BufferedOutputStream os = new BufferedOutputStream(fileSystem.create(new Path(networkPath)))) {
-                ModelSerializer.writeModel(sparkNet.getNetwork(), os, true);
-            }
-
-            // Save evaluation
-            String evalPath = FilenameUtils.concat(saveDirectory, "evaluation.txt");
-            SparkUtils.writeStringToFile(evalPath, evaluation.stats(), sc);
-        }
-
-
-        log.info("----- Example Complete -----");
+        CnnNetworkFactory.runNetwork(sc);
     }
+
+	
 
 
 }

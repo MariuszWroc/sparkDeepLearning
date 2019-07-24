@@ -1,13 +1,16 @@
 package pl.mariuszczarny.deepLearning.mnist;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.deeplearning4j.datasets.iterator.impl.MnistDataSetIterator;
-import org.deeplearning4j.eval.Evaluation;
+import org.nd4j.evaluation.classification.Evaluation;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.layers.DenseLayer;
@@ -37,61 +40,111 @@ public class MnistNetwork {
 
 	@Parameter(names = "-numEpochs", description = "Number of epochs for training")
 	private static int numEpochs = 2;
-
-	public static void createNetwork(JavaSparkContext sc) throws IOException {
-		DataSetIterator iterTrain = new MnistDataSetIterator(batchSizePerWorker, true, 12345);
-		DataSetIterator iterTest = new MnistDataSetIterator(batchSizePerWorker, true, 12345);
-		List<DataSet> trainDataList = new ArrayList<>();
-		List<DataSet> testDataList = new ArrayList<>();
-		while (iterTrain.hasNext()) {
-			trainDataList.add(iterTrain.next());
+	
+	private static String saveDir;
+	
+	private static JavaRDD<DataSet> createRDD(JavaSparkContext sc) throws IOException {
+		int seed = 12345;
+		List<DataSet> dataList = new ArrayList<>();
+		DataSetIterator dataSetIterator = new MnistDataSetIterator(batchSizePerWorker, true, seed);
+		
+		while (dataSetIterator.hasNext()) {
+			dataList.add(dataSetIterator.next());
 		}
-		while (iterTest.hasNext()) {
-			testDataList.add(iterTest.next());
-		}
+		
+		return sc.parallelize(dataList);
+	}
 
-		JavaRDD<DataSet> trainData = sc.parallelize(trainDataList);
-		JavaRDD<DataSet> testData = sc.parallelize(testDataList);
+	public static void createNetwork(JavaSparkContext sparkContext) throws IOException {
+		JavaRDD<DataSet> trainingData = createRDD(sparkContext);
+		JavaRDD<DataSet> testData = createRDD(sparkContext);
+		MultiLayerConfiguration networkConfig = configureMultiLayerNetwork();
+		TrainingMaster<?, ?> trainingConfig = configureTraining();
+		SparkDl4jMultiLayer sparkNetwork = new SparkDl4jMultiLayer(sparkContext, networkConfig, trainingConfig);
 
-		// ----------------------------------
-		// Create network configuration and conduct network training
-		MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder().seed(12345).activation(Activation.LEAKYRELU)
-				.weightInit(WeightInit.XAVIER).updater(new Nesterovs(0.1))// To configure:
-																			// .updater(Nesterovs.builder().momentum(0.9).build())
-				.l2(1e-4).list().layer(new DenseLayer.Builder().nIn(28 * 28).nOut(500).build())
-				.layer(new DenseLayer.Builder().nOut(100).build())
-				.layer(new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
-						.activation(Activation.SOFTMAX).nOut(10).build())
-				.build();
+		executeTraining(trainingData, sparkNetwork);
+		Evaluation evaluation = performEvaluation(testData, sparkNetwork);
 
-		// Configuration for Spark training: see http://deeplearning4j.org/spark for
-		// explanation of these configuration options
-		TrainingMaster tm = new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker) // Each DataSet object:
-																								// contains (by default)
-																								// 32 examples
-				.averagingFrequency(5).workerPrefetchNumBatches(2) // Async prefetching: 2 examples per worker
-				.batchSizePerWorker(batchSizePerWorker).build();
+		saveResult(evaluation, sparkNetwork);
+		doCleaning(sparkContext, trainingConfig);
+	}
 
-		// Create the Spark network
-		SparkDl4jMultiLayer sparkNet = new SparkDl4jMultiLayer(sc, conf, tm);
+	private static void saveResult(Evaluation evaluation, SparkDl4jMultiLayer sparkNetwork) throws IOException {
+        if(saveDir != null && !saveDir.isEmpty()){
+            File sd = new File(saveDir);
+            if(!sd.exists())
+                sd.mkdirs();
 
-		// Execute training:
-		for (int i = 0; i < numEpochs; i++) {
-			sparkNet.fit(trainData);
-			log.info("Completed Epoch {}", i);
-		}
+            log.info("Saving network and evaluation stats to directory: {}", saveDir);
+            sparkNetwork.getNetwork().save(new File(saveDir, "trainedNet.bin"));
+            FileUtils.writeStringToFile(new File(saveDir, "evaulation.txt"), evaluation.stats(), StandardCharsets.UTF_8);
+        }
+	}
 
+	private static void doCleaning(JavaSparkContext sparkContext, TrainingMaster<?, ?> trainingConfig) {
+		trainingConfig.deleteTempFiles(sparkContext);
+
+		log.info("***** Delete the temp training files *****");
+	}
+
+	private static Evaluation performEvaluation(JavaRDD<DataSet> testData, SparkDl4jMultiLayer sparkNetwork) {
 		// Perform evaluation (distributed)
 //	        Evaluation evaluation = sparkNet.evaluate(testData);
-		Evaluation evaluation = sparkNet.doEvaluation(testData, 64, new Evaluation(10))[0]; // Work-around for 0.9.1
+		Evaluation evaluation = sparkNetwork.doEvaluation(testData, 64, new Evaluation(10))[0]; // Work-around for 0.9.1
 																							// bug: see
 																							// https://deeplearning4j.org/releasenotes
 		log.info("***** Evaluation *****");
 		log.info(evaluation.stats());
+		
+		return evaluation;
+	}
 
-		// Delete the temp training files, now that we are done with them
-		tm.deleteTempFiles(sc);
+	private static void executeTraining(JavaRDD<DataSet> trainData, SparkDl4jMultiLayer sparkNet) {
+		for (int i = 0; i < numEpochs; i++) {
+			sparkNet.fit(trainData);
+			log.info("Completed Epoch {}", i);
+		}
+	}
 
-		log.info("***** Example Complete *****");
+	private static TrainingMaster<?, ?> configureTraining() {
+		// Configuration for Spark training: see http://deeplearning4j.org/spark for
+		// explanation of these configuration options
+		return new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker) // Each DataSet object:
+																								// contains (by default)
+																								// 32 examples
+				.averagingFrequency(5)
+				.workerPrefetchNumBatches(2) // Async prefetching: 2 examples per worker
+				.batchSizePerWorker(batchSizePerWorker)
+				.build();
+	}
+
+	private static MultiLayerConfiguration configureMultiLayerNetwork() {
+		// ----------------------------------
+		// Create network configuration and conduct network training
+		return new NeuralNetConfiguration.Builder()
+				.seed(12345)
+				.activation(Activation.LEAKYRELU)
+				.weightInit(WeightInit.XAVIER)
+				.updater(new Nesterovs(0.1))// To configure:
+																			// .updater(Nesterovs.builder().momentum(0.9).build())
+				.l2(1e-4)
+				.list()
+				.layer(new DenseLayer.Builder()
+						.nIn(28 * 28).nOut(500)
+						.build())
+				.layer(new DenseLayer.Builder()
+						.nOut(100)
+						.build())
+				.layer(new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
+						.activation(Activation.SOFTMAX)
+						.nOut(10)
+						.build())
+				.build();
+	}
+
+	public static void createNetwork(JavaSparkContext sc, String saveDirectory) throws IOException {
+		saveDir = saveDirectory;
+		createNetwork(sc);
+		
 	}
 }

@@ -67,7 +67,7 @@ public class TrainLocal {
         iter.setPreProcessor(new ImagePreProcessingScaler());   //Scale 0-255 valued pixels to 0-1 range
 
         //Create the network
-        ComputationGraph net = NetworkFactory.getCCNNetwork();
+        ComputationGraph net = CnnNetworkFactory.getCCNNetwork();
         net.setListeners(new PerformanceListener(50, true));
 
         //Reduce auto GC frequency for better performance

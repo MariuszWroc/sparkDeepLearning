@@ -39,12 +39,9 @@ import pl.mariuszczarny.deepLearning.utils.JCommanderUtils;
  */
 public class ApplicationRunner {
     public static Logger log = LoggerFactory.getLogger(ApplicationRunner.class);
-
-    @Parameter(names = {"--numEpochs"}, description = "Number of epochs for training")
-    private int numEpochs = 10;
-
+    
     @Parameter(names = {"--saveDir"}, description = "If set, the directory to save the trained network")
-    private String saveDir;
+    private static String saveDir;
 
     public static void main(String[] args) throws Exception {
         new ApplicationRunner().entryPoint(args);
@@ -57,11 +54,12 @@ public class ApplicationRunner {
         
         switch (localSource) {
 		case MNIST:
-			MnistNetwork.createNetwork(sc);
+			MnistNetwork.createNetwork(sc, saveDir);
 			break;
 		case TINYIMAGENET:
 			break;
 		default:
+			log.info("No network choose to run");
 			break;
         }
     }
