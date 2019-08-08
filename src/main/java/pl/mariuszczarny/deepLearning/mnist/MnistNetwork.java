@@ -15,6 +15,7 @@ import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.layers.DenseLayer;
 import org.deeplearning4j.nn.conf.layers.OutputLayer;
+import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.spark.api.TrainingMaster;
 import org.deeplearning4j.spark.impl.multilayer.SparkDl4jMultiLayer;
@@ -36,12 +37,14 @@ public class MnistNetwork {
 	private boolean useSparkLocal = true;
 
 	@Parameter(names = "-batchSizePerWorker", description = "Number of examples to fit each worker with")
-	private static int batchSizePerWorker = 16;
+	private static int batchSizePerWorker = 32;
 
 	@Parameter(names = "-numEpochs", description = "Number of epochs for training")
-	private static int numEpochs = 2;
+	private static int numEpochs = 4;
 	
-	private static String saveDir;
+	private static String saveDir = "MyMultiLayerNetwork.zip";
+	
+	private static final boolean isSaveUpdater = true;
 	
 	private static JavaRDD<DataSet> createRDD(JavaSparkContext sc) throws IOException {
 		int seed = 12345;
@@ -55,7 +58,7 @@ public class MnistNetwork {
 		return sc.parallelize(dataList);
 	}
 
-	public static void createNetwork(JavaSparkContext sparkContext) throws IOException {
+	public static void createNetwork(JavaSparkContext sparkContext, boolean isSaved) throws IOException {
 		JavaRDD<DataSet> trainingData = createRDD(sparkContext);
 		JavaRDD<DataSet> testData = createRDD(sparkContext);
 		MultiLayerConfiguration networkConfig = configureMultiLayerNetwork();
@@ -65,20 +68,76 @@ public class MnistNetwork {
 		executeTraining(trainingData, sparkNetwork);
 		Evaluation evaluation = performEvaluation(testData, sparkNetwork);
 
-		saveResult(evaluation, sparkNetwork);
+		if (isSaved) {
+			saveResult(evaluation, sparkNetwork.getNetwork());
+		}
+		
 		doCleaning(sparkContext, trainingConfig);
 	}
+	
+	private static MultiLayerConfiguration configureMultiLayerNetwork() {
+		return NeuralNetworkConfig.getCnnNetwork();
+	}
 
-	private static void saveResult(Evaluation evaluation, SparkDl4jMultiLayer sparkNetwork) throws IOException {
+	public static void restoreNetwork(JavaSparkContext sparkContext) throws IOException {
+		JavaRDD<DataSet> trainingData = createRDD(sparkContext);
+		JavaRDD<DataSet> testData = createRDD(sparkContext);
+		
+		SparkDl4jMultiLayer sparkNetwork = loadResult(sparkContext, configureTraining());
+		
+		executeTraining(trainingData, sparkNetwork);
+		Evaluation evaluation = performEvaluation(testData, sparkNetwork);
+
+		saveResult(evaluation, sparkNetwork.getNetwork());			
+		
+		doCleaning(sparkContext, sparkNetwork.getTrainingMaster());
+	}
+
+	private static void saveResult(Evaluation evaluation, MultiLayerNetwork multiLayerNetwork) throws IOException {
         if(saveDir != null && !saveDir.isEmpty()){
             File sd = new File(saveDir);
-            if(!sd.exists())
+            if(!sd.exists()) {
                 sd.mkdirs();
+            }
 
             log.info("Saving network and evaluation stats to directory: {}", saveDir);
-            sparkNetwork.getNetwork().save(new File(saveDir, "trainedNet.bin"));
+            saveModel(multiLayerNetwork);
             FileUtils.writeStringToFile(new File(saveDir, "evaulation.txt"), evaluation.stats(), StandardCharsets.UTF_8);
         }
+        
+      saveModel(multiLayerNetwork);
+	}
+
+	private static void saveModel(MultiLayerNetwork multiLayerNetwork) throws IOException {
+		    File locationToSave = new File(saveDir);      //Where to save the network. Note: the file is in .zip format - can be opened externally
+		                                                //Updater: i.e., the state for Momentum, RMSProp, Adagrad etc. Save this if you want to train your network more in the future
+		    multiLayerNetwork.save(locationToSave, isSaveUpdater);
+	}
+	
+    
+
+	private static SparkDl4jMultiLayer loadResult(JavaSparkContext sparkContext, TrainingMaster<?, ?> trainingConfig) throws IOException {
+		MultiLayerNetwork multiLayerNetwork = null;
+        if(saveDir != null && !saveDir.isEmpty()){
+        	File sd = new File(saveDir);
+            if(!sd.exists()) {
+                sd.mkdirs();
+            }
+
+            log.info("Loading network from directory: {}", saveDir);
+            loadModel();
+        } else {
+        	log.info("Can't load network from directory: {}", saveDir);
+        	log.info("Create default network");
+        	multiLayerNetwork = new MultiLayerNetwork(configureMultiLayerNetwork());
+        }
+        
+        return new SparkDl4jMultiLayer(sparkContext, multiLayerNetwork, trainingConfig);
+	}
+
+	private static MultiLayerNetwork loadModel() throws IOException {
+		File locationToSave = new File(saveDir); 
+		return MultiLayerNetwork.load(locationToSave, isSaveUpdater);
 	}
 
 	private static void doCleaning(JavaSparkContext sparkContext, TrainingMaster<?, ?> trainingConfig) {
@@ -118,33 +177,12 @@ public class MnistNetwork {
 				.build();
 	}
 
-	private static MultiLayerConfiguration configureMultiLayerNetwork() {
-		// ----------------------------------
-		// Create network configuration and conduct network training
-		return new NeuralNetConfiguration.Builder()
-				.seed(12345)
-				.activation(Activation.LEAKYRELU)
-				.weightInit(WeightInit.XAVIER)
-				.updater(new Nesterovs(0.1))// To configure:
-																			// .updater(Nesterovs.builder().momentum(0.9).build())
-				.l2(1e-4)
-				.list()
-				.layer(new DenseLayer.Builder()
-						.nIn(28 * 28).nOut(500)
-						.build())
-				.layer(new DenseLayer.Builder()
-						.nOut(100)
-						.build())
-				.layer(new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
-						.activation(Activation.SOFTMAX)
-						.nOut(10)
-						.build())
-				.build();
-	}
+
 
 	public static void createNetwork(JavaSparkContext sc, String saveDirectory) throws IOException {
 		saveDir = saveDirectory;
-		createNetwork(sc);
+		boolean isSaved = false;
+		createNetwork(sc, isSaved);
 		
 	}
 }
