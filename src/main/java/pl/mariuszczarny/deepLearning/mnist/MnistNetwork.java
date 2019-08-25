@@ -10,46 +10,34 @@ import org.apache.commons.io.FileUtils;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.deeplearning4j.datasets.iterator.impl.MnistDataSetIterator;
-import org.nd4j.evaluation.classification.Evaluation;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
-import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
-import org.deeplearning4j.nn.conf.layers.DenseLayer;
-import org.deeplearning4j.nn.conf.layers.OutputLayer;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
-import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.spark.api.TrainingMaster;
 import org.deeplearning4j.spark.impl.multilayer.SparkDl4jMultiLayer;
 import org.deeplearning4j.spark.impl.paramavg.ParameterAveragingTrainingMaster;
-import org.nd4j.linalg.activations.Activation;
+import org.nd4j.evaluation.classification.Evaluation;
 import org.nd4j.linalg.dataset.DataSet;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
-import org.nd4j.linalg.learning.config.Nesterovs;
-import org.nd4j.linalg.lossfunctions.LossFunctions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.beust.jcommander.Parameter;
 
 public class MnistNetwork {
-	private static final Logger log = LoggerFactory.getLogger(MnistNetwork.class);
-
-	@Parameter(names = "-useSparkLocal", description = "Use spark local (helper for testing/running without spark submit)", arity = 1)
-	private boolean useSparkLocal = true;
-
+	private static final Logger log = LoggerFactory.getLogger(MnistNetwork.class);	
+	private static final int workerPrefetchNumBatches = 2;
+	private static final int averagingFrequency = 5;
 	@Parameter(names = "-batchSizePerWorker", description = "Number of examples to fit each worker with")
 	private static int batchSizePerWorker = 32;
-
 	@Parameter(names = "-numEpochs", description = "Number of epochs for training")
 	private static int numEpochs = 4;
-	
 	private static String saveDir = "MyMultiLayerNetwork.zip";
-	
 	private static final boolean isSaveUpdater = true;
+	private static final int seed = 12345;
 	
-	private static JavaRDD<DataSet> createRDD(JavaSparkContext sc) throws IOException {
-		int seed = 12345;
+	private static JavaRDD<DataSet> createRDD(JavaSparkContext sc, boolean isTrainingData) throws IOException {
 		List<DataSet> dataList = new ArrayList<>();
-		DataSetIterator dataSetIterator = new MnistDataSetIterator(batchSizePerWorker, true, seed);
+		DataSetIterator dataSetIterator = new MnistDataSetIterator(batchSizePerWorker, isTrainingData, seed);
 		
 		while (dataSetIterator.hasNext()) {
 			dataList.add(dataSetIterator.next());
@@ -59,9 +47,9 @@ public class MnistNetwork {
 	}
 
 	public static void createNetwork(JavaSparkContext sparkContext, boolean isSaved) throws IOException {
-		JavaRDD<DataSet> trainingData = createRDD(sparkContext);
-		JavaRDD<DataSet> testData = createRDD(sparkContext);
-		MultiLayerConfiguration networkConfig = configureMultiLayerNetwork();
+		JavaRDD<DataSet> trainingData = createRDD(sparkContext, true);
+		JavaRDD<DataSet> testData = createRDD(sparkContext, false);
+		MultiLayerConfiguration networkConfig = NeuralNetworkConfig.getCnnNetwork(seed);
 		TrainingMaster<?, ?> trainingConfig = configureTraining();
 		SparkDl4jMultiLayer sparkNetwork = new SparkDl4jMultiLayer(sparkContext, networkConfig, trainingConfig);
 
@@ -74,14 +62,10 @@ public class MnistNetwork {
 		
 		doCleaning(sparkContext, trainingConfig);
 	}
-	
-	private static MultiLayerConfiguration configureMultiLayerNetwork() {
-		return NeuralNetworkConfig.getCnnNetwork();
-	}
 
 	public static void restoreNetwork(JavaSparkContext sparkContext) throws IOException {
-		JavaRDD<DataSet> trainingData = createRDD(sparkContext);
-		JavaRDD<DataSet> testData = createRDD(sparkContext);
+		JavaRDD<DataSet> trainingData = createRDD(sparkContext, true);
+		JavaRDD<DataSet> testData = createRDD(sparkContext, false);
 		
 		SparkDl4jMultiLayer sparkNetwork = loadResult(sparkContext, configureTraining());
 		
@@ -109,8 +93,7 @@ public class MnistNetwork {
 	}
 
 	private static void saveModel(MultiLayerNetwork multiLayerNetwork) throws IOException {
-		    File locationToSave = new File(saveDir);      //Where to save the network. Note: the file is in .zip format - can be opened externally
-		                                                //Updater: i.e., the state for Momentum, RMSProp, Adagrad etc. Save this if you want to train your network more in the future
+		    File locationToSave = new File(saveDir);      
 		    multiLayerNetwork.save(locationToSave, isSaveUpdater);
 	}
 	
@@ -129,7 +112,7 @@ public class MnistNetwork {
         } else {
         	log.info("Can't load network from directory: {}", saveDir);
         	log.info("Create default network");
-        	multiLayerNetwork = new MultiLayerNetwork(configureMultiLayerNetwork());
+        	multiLayerNetwork = new MultiLayerNetwork(NeuralNetworkConfig.getCnnNetwork(seed));
         }
         
         return new SparkDl4jMultiLayer(sparkContext, multiLayerNetwork, trainingConfig);
@@ -170,9 +153,8 @@ public class MnistNetwork {
 		// explanation of these configuration options
 		return new ParameterAveragingTrainingMaster.Builder(batchSizePerWorker) // Each DataSet object:
 																								// contains (by default)
-																								// 32 examples
-				.averagingFrequency(5)
-				.workerPrefetchNumBatches(2) // Async prefetching: 2 examples per worker
+				.averagingFrequency(averagingFrequency)
+				.workerPrefetchNumBatches(workerPrefetchNumBatches) // Async prefetching: 2 examples per worker
 				.batchSizePerWorker(batchSizePerWorker)
 				.build();
 	}

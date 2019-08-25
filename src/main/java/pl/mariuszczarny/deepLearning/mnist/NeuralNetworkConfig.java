@@ -3,6 +3,7 @@ package pl.mariuszczarny.deepLearning.mnist;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.inputs.InputType;
@@ -40,29 +41,26 @@ public class NeuralNetworkConfig {
 				.build();
 	}
 	
-	public static MultiLayerConfiguration getCnnNetwork() {
+	public static MultiLayerConfiguration getCnnNetwork(int seed) {
 		int height = 28;    // height of the picture in px
         int width = 28;     // width of the picture in px
         int channels = 1;   // single channel for grayscale images
         int outputNum = 10; // 10 digits classification
-        int batchSize = 54; // number of samples that will be propagated through the network in each iteration
-        int nEpochs = 1;    // number of training epochs
-
-        int seed = 1234;    // number used to initialize a pseudorandom number generator.
         
-        // reduce the learning rate as the number of training epochs increases
-        // iteration #, learning rate
-        Map<Integer, Double> learningRateSchedule = new HashMap<>();
-        learningRateSchedule.put(0, 0.06);
-        learningRateSchedule.put(200, 0.05);
-        learningRateSchedule.put(600, 0.028);
-        learningRateSchedule.put(800, 0.0060);
-        learningRateSchedule.put(1000, 0.001);
+        Map<Integer, Double> learningRateScheduleMap = new HashMap<>();
+        learningRateScheduleMap.put(0, 0.06);
+        learningRateScheduleMap.put(200, 0.05);
+        learningRateScheduleMap.put(600, 0.028);
+        learningRateScheduleMap.put(800, 0.006);
+        learningRateScheduleMap.put(1000, 0.001);
+		
+        MapSchedule learningRateSchedule = new MapSchedule(ScheduleType.ITERATION, learningRateScheduleMap);
 		
         return new NeuralNetConfiguration.Builder()
                 .seed(seed)
-                .l2(0.0005) // ridge regression value
-                .updater(new Nesterovs(new MapSchedule(ScheduleType.ITERATION, learningRateSchedule)))
+                .l2(0.00005)
+                .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
+                .updater(new Nesterovs(learningRateSchedule))
                 .weightInit(WeightInit.XAVIER)
                 .list()
                 .layer(new ConvolutionLayer.Builder(5, 5)
@@ -72,26 +70,26 @@ public class NeuralNetworkConfig {
                     .activation(Activation.IDENTITY)
                     .build())
                 .layer(new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX)
-                    .kernelSize(2, 2)
+                    .kernelSize(3, 3)
                     .stride(2, 2)
                     .build())
                 .layer(new ConvolutionLayer.Builder(5, 5)
-                    .stride(1, 1) // nIn need not specified in later layers
+                    .stride(1, 1)
                     .nOut(50)
                     .activation(Activation.IDENTITY)
                     .build())
                 .layer(new SubsamplingLayer.Builder(SubsamplingLayer.PoolingType.MAX)
-                    .kernelSize(2, 2)
+                    .kernelSize(3, 3)
                     .stride(2, 2)
                     .build())
                 .layer(new DenseLayer.Builder().activation(Activation.RELU)
                     .nOut(500)
                     .build())
-                .layer(new OutputLayer.Builder(LossFunctions.LossFunction.NEGATIVELOGLIKELIHOOD)
+                .layer(new OutputLayer.Builder(LossFunctions.LossFunction.MCXENT)
                     .nOut(outputNum)
                     .activation(Activation.SOFTMAX)
                     .build())
-                .setInputType(InputType.convolutionalFlat(height, width, channels)) // InputType.convolutional for normal image
+                .setInputType(InputType.convolutionalFlat(height, width, channels))
                 .build();
 	}
 }

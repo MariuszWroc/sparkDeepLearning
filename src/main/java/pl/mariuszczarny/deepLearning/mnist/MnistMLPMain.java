@@ -1,6 +1,7 @@
 package pl.mariuszczarny.deepLearning.mnist;
 
 import org.apache.spark.api.java.JavaSparkContext;
+import org.nd4j.linalg.factory.Nd4j;
 
 /*******************************************************************************
  * Copyright (c) 2015-2019 Skymind, Inc.
@@ -50,21 +51,17 @@ public class MnistMLPMain {
 	@Parameter(names = "-useSparkLocal", description = "Use spark local (helper for testing/running without spark submit)", arity = 1)
 	private boolean useSparkLocal = true;
 
-	@Parameter(names = "-batchSizePerWorker", description = "Number of examples to fit each worker with")
-	private int batchSizePerWorker = 16;
-
-	@Parameter(names = "-numEpochs", description = "Number of epochs for training")
-	private int numEpochs = 2;
-
 	public static void main(String[] args) throws Exception {
 		new MnistMLPMain().entryPoint(args);
 	}
 
 	protected void entryPoint(String[] args) throws Exception {
 		useJCommand(args);
+		Nd4j.getMemoryManager().setAutoGcWindow(5000);
 		JavaSparkContext sc = JavaSparkHelper.initSparkContext(useSparkLocal);
 		MnistNetwork.createNetwork(sc, false);
 		//MnistNetwork.restoreNetwork(sc);
+
 	}
 
 	private void useJCommand(String[] args) {
