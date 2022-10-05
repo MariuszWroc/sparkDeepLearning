@@ -14,7 +14,7 @@
 		<spark.version>1.6.3</spark.version>
 		<spark2.version>2.4.3</spark2.version>
 		<dl4j.version>1.0.0-beta4</dl4j.version>
-		<jackson.version>2.5.1</jackson.version>
+		<jackson.version>2.12.6.1</jackson.version>
 		<scala.binary.version>2.11</scala.binary.version>
 		<nd4j.version>1.0.0-beta4</nd4j.version>
 		<nd4j.backend>nd4j-native-platform</nd4j.backend>
